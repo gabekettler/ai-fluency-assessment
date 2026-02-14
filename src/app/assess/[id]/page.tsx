@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { TIERS } from "@/lib/rubric";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,19 +28,14 @@ export default function AssessmentPage() {
   // Load assessment data on mount
   useEffect(() => {
     async function loadAssessment() {
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("assessments")
-        .select("*")
-        .eq("id", id)
-        .single();
-
-      if (error || !data) {
+      const res = await fetch(`/api/get-assessment?id=${id}`);
+      if (!res.ok) {
         setError("Assessment not found. Please check your link.");
         setPhase("complete");
         return;
       }
 
+      const { assessment: data } = await res.json();
       const a = data as Assessment;
 
       if (a.status === "scored") {
