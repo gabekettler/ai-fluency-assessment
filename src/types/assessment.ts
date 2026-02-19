@@ -40,6 +40,7 @@ export interface TierSubmission {
   assessment_id: string;
   tier_number: number;
   answers: [string, string, string];
+  behavioral_signals?: TierBehavioralSignals;
 }
 
 export interface ScoreResult {
@@ -56,4 +57,44 @@ export interface ScoreResult {
 export interface AssessmentReport {
   assessment: Assessment;
   tier_scores: TierScore[];
+}
+
+// --- Behavioral Signal Tracking ---
+
+/** Client-side behavioral data collected per tier */
+export interface TierBehavioralSignals {
+  tier_number: number;
+  paste_count: number;
+  largest_paste_length: number;
+  focus_loss_count: number;
+  total_blur_duration_ms: number;
+  tier_start_time: number; // epoch ms
+  tier_submit_time: number; // epoch ms
+  burst_count: number;
+  answer_char_counts: [number, number, number];
+  answer_word_counts: [number, number, number];
+}
+
+/** Database row shape for behavioral_signals table */
+export interface BehavioralRecord {
+  id: string;
+  assessment_id: string;
+  tier_number: number;
+  paste_count: number;
+  largest_paste_length: number;
+  focus_loss_count: number;
+  total_blur_duration_ms: number;
+  time_on_tier_ms: number;
+  burst_count: number;
+  answer_char_counts: number[];
+  answer_word_counts: number[];
+  recorded_at: string;
+}
+
+export type ConfidenceLevel = "high" | "medium" | "low";
+
+export interface ConfidenceResult {
+  score: number; // 0-100
+  level: ConfidenceLevel;
+  flags: string[]; // human-readable concerns
 }

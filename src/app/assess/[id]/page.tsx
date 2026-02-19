@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { TIERS } from "@/lib/rubric";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { Assessment } from "@/types/assessment";
+import type { Assessment, TierBehavioralSignals } from "@/types/assessment";
 
 type Phase = "loading" | "welcome" | "questions" | "scoring" | "complete";
 
@@ -24,6 +24,97 @@ export default function AssessmentPage() {
   const [currentTier, setCurrentTier] = useState(1);
   const [answers, setAnswers] = useState<[string, string, string]>(["", "", ""]);
   const [error, setError] = useState("");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // --- Behavioral signal tracking (invisible, no re-renders) ---
+  const pasteCountsRef = useRef<[number, number, number]>([0, 0, 0]);
+  const largestPasteLenRef = useRef(0);
+  const focusLossCountRef = useRef(0);
+  const blurStartRef = useRef<number | null>(null);
+  const totalBlurDurationRef = useRef(0);
+  const tierStartTimeRef = useRef(Date.now());
+  const burstCountRef = useRef(0);
+  const lastAnswerLengthsRef = useRef<[number, number, number]>([0, 0, 0]);
+  const lastInputTimeRef = useRef<[number, number, number]>([0, 0, 0]);
+
+  // Suggested time per tier (minutes) — informational only
+  const suggestedMinutes: Record<number, number> = { 1: 5, 2: 8, 3: 10, 4: 12, 5: 15 };
+
+  // Reset tracking when tier changes
+  useEffect(() => {
+    pasteCountsRef.current = [0, 0, 0];
+    largestPasteLenRef.current = 0;
+    focusLossCountRef.current = 0;
+    blurStartRef.current = null;
+    totalBlurDurationRef.current = 0;
+    tierStartTimeRef.current = Date.now();
+    burstCountRef.current = 0;
+    lastAnswerLengthsRef.current = [0, 0, 0];
+    lastInputTimeRef.current = [0, 0, 0];
+    setElapsedSeconds(0);
+  }, [currentTier]);
+
+  // Visible timer — ticks every second during questions phase
+  useEffect(() => {
+    if (phase !== "questions") return;
+    const interval = setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  // Tab focus/blur tracking via visibilitychange
+  useEffect(() => {
+    function handleVisibility() {
+      if (document.hidden) {
+        // Tab lost focus
+        blurStartRef.current = Date.now();
+        focusLossCountRef.current += 1;
+      } else {
+        // Tab regained focus
+        if (blurStartRef.current !== null) {
+          totalBlurDurationRef.current += Date.now() - blurStartRef.current;
+          blurStartRef.current = null;
+        }
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  /** Build the behavioral signals object for the current tier */
+  function buildBehavioralSignals(): TierBehavioralSignals {
+    const now = Date.now();
+    // If still blurred at submit time, close out the duration
+    if (blurStartRef.current !== null) {
+      totalBlurDurationRef.current += now - blurStartRef.current;
+      blurStartRef.current = null;
+    }
+    return {
+      tier_number: currentTier,
+      paste_count:
+        pasteCountsRef.current[0] +
+        pasteCountsRef.current[1] +
+        pasteCountsRef.current[2],
+      largest_paste_length: largestPasteLenRef.current,
+      focus_loss_count: focusLossCountRef.current,
+      total_blur_duration_ms: totalBlurDurationRef.current,
+      tier_start_time: tierStartTimeRef.current,
+      tier_submit_time: now,
+      burst_count: burstCountRef.current,
+      answer_char_counts: [
+        answers[0].length,
+        answers[1].length,
+        answers[2].length,
+      ],
+      answer_word_counts: [
+        answers[0].trim().split(/\s+/).filter(Boolean).length,
+        answers[1].trim().split(/\s+/).filter(Boolean).length,
+        answers[2].trim().split(/\s+/).filter(Boolean).length,
+      ],
+    };
+  }
 
   // Load assessment data on mount
   useEffect(() => {
@@ -88,6 +179,7 @@ export default function AssessmentPage() {
     setPhase("scoring");
 
     try {
+      const behavioral_signals = buildBehavioralSignals();
       const res = await fetch("/api/score-tier", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -95,6 +187,7 @@ export default function AssessmentPage() {
           assessment_id: id,
           tier_number: currentTier,
           answers,
+          behavioral_signals,
         }),
       });
 
@@ -168,6 +261,11 @@ export default function AssessmentPage() {
             <p className="text-sm text-muted-foreground">
               This typically takes 10-30 minutes.
             </p>
+            <p className="text-sm text-muted-foreground border-l-2 border-muted-foreground/30 pl-3">
+              This assessment monitors behavioral activity such as copy-paste
+              usage, tab switching, and response timing to help ensure the
+              integrity of your results.
+            </p>
             <Button
               className="w-full mt-4"
               onClick={() => setPhase("questions")}
@@ -212,8 +310,16 @@ export default function AssessmentPage() {
             <div className="text-xs text-muted-foreground">
               Frontier Door &amp; Cabinet
             </div>
-            <div className="text-xs text-muted-foreground">
-              Level {currentTier} of 5
+            <div className="flex items-center gap-3">
+              <div className="text-xs text-muted-foreground tabular-nums">
+                {Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, "0")}
+                <span className="text-muted-foreground/50">
+                  {" "}/ ~{suggestedMinutes[currentTier]} min
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Level {currentTier} of 5
+              </div>
             </div>
           </div>
 
@@ -242,9 +348,34 @@ export default function AssessmentPage() {
                     placeholder="Type your answer here..."
                     rows={4}
                     value={answers[qi]}
+                    onPaste={() => {
+                      pasteCountsRef.current[qi] += 1;
+                    }}
                     onChange={(e) => {
+                      const newVal = e.target.value;
+                      const oldLen = lastAnswerLengthsRef.current[qi];
+                      const diff = newVal.length - oldLen;
+                      const now = Date.now();
+                      const elapsed = now - lastInputTimeRef.current[qi];
+
+                      // Detect typing burst: >50 chars in <500ms
+                      if (diff > 50 && elapsed < 500) {
+                        burstCountRef.current += 1;
+                      }
+
+                      // Track largest paste via size delta
+                      if (diff > 0 && diff > largestPasteLenRef.current) {
+                        // Only update if this looks like a paste (>50 chars at once)
+                        if (diff > 50) {
+                          largestPasteLenRef.current = diff;
+                        }
+                      }
+
+                      lastAnswerLengthsRef.current[qi] = newVal.length;
+                      lastInputTimeRef.current[qi] = now;
+
                       const newAnswers = [...answers] as [string, string, string];
-                      newAnswers[qi] = e.target.value;
+                      newAnswers[qi] = newVal;
                       setAnswers(newAnswers);
                     }}
                   />

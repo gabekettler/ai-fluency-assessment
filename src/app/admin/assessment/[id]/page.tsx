@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { TIERS, TIER_LABELS } from "@/lib/rubric";
-import type { Assessment, TierScore } from "@/types/assessment";
+import { calculateConfidence } from "@/lib/confidence";
+import type { Assessment, TierScore, BehavioralRecord, ConfidenceResult } from "@/types/assessment";
 
 export default async function AssessmentReportPage({
   params,
@@ -39,8 +40,17 @@ export default async function AssessmentReportPage({
     .eq("assessment_id", id)
     .order("tier_number", { ascending: true });
 
+  const { data: behavioralData } = await supabase
+    .from("behavioral_signals")
+    .select("*")
+    .eq("assessment_id", id)
+    .order("tier_number", { ascending: true });
+
   const a = assessment as Assessment;
   const scores = (tierScores ?? []) as TierScore[];
+  const signals = (behavioralData ?? []) as BehavioralRecord[];
+  const confidence: ConfidenceResult | null =
+    signals.length > 0 ? calculateConfidence(signals) : null;
 
   // Role fit color
   let fitColorClass = "text-red-600 bg-red-50 border-red-200";
@@ -69,7 +79,7 @@ export default async function AssessmentReportPage({
 
       <main className="max-w-4xl mx-auto px-6 py-8 space-y-6">
         {/* Header info */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <InfoCard label="Candidate" value={a.candidate_name} />
           <InfoCard label="Position" value={a.position} />
           <InfoCard
@@ -90,6 +100,11 @@ export default async function AssessmentReportPage({
                 : "—"
             }
           />
+          {confidence ? (
+            <ConfidenceBadge confidence={confidence} />
+          ) : (
+            <InfoCard label="Confidence" value="No data" />
+          )}
         </div>
 
         {a.status !== "scored" && (
@@ -218,6 +233,80 @@ export default async function AssessmentReportPage({
                 </Card>
               );
             })}
+
+            {/* Behavioral Signals Section */}
+            {signals.length > 0 && confidence && (
+              <>
+                <Separator />
+                <h2 className="text-lg font-semibold">Behavioral Signals</h2>
+
+                {/* Flags list */}
+                {confidence.flags.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="text-base">Flags</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ul className="space-y-1">
+                        {confidence.flags.map((flag, i) => (
+                          <li
+                            key={i}
+                            className="text-sm text-yellow-700 bg-yellow-50 rounded px-3 py-1.5"
+                          >
+                            {flag}
+                          </li>
+                        ))}
+                      </ul>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Per-tier metric cards */}
+                {signals.map((s) => (
+                  <Card key={s.tier_number}>
+                    <CardHeader>
+                      <CardTitle className="text-base">
+                        Tier {s.tier_number} Metrics
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <MetricCard
+                          label="Time on Tier"
+                          value={formatDuration(s.time_on_tier_ms)}
+                          warn={s.time_on_tier_ms < 60_000}
+                        />
+                        <MetricCard
+                          label="Paste Events"
+                          value={String(s.paste_count)}
+                          warn={s.paste_count > 0}
+                        />
+                        <MetricCard
+                          label="Tab Switches"
+                          value={String(s.focus_loss_count)}
+                          warn={s.focus_loss_count > 3}
+                        />
+                        <MetricCard
+                          label="Time Away"
+                          value={formatDuration(s.total_blur_duration_ms)}
+                          warn={s.total_blur_duration_ms > 60_000}
+                        />
+                        <MetricCard
+                          label="Word Counts"
+                          value={(s.answer_word_counts ?? []).join(" / ")}
+                          warn={false}
+                        />
+                        <MetricCard
+                          label="Typing Bursts"
+                          value={String(s.burst_count)}
+                          warn={s.burst_count > 0}
+                        />
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </>
+            )}
           </>
         )}
       </main>
@@ -247,4 +336,49 @@ function ScoreBadge({ score }: { score: number | null }) {
       {score}/4
     </span>
   );
+}
+
+function ConfidenceBadge({ confidence }: { confidence: ConfidenceResult }) {
+  const colorMap = {
+    high: "bg-green-50 text-green-700 border-green-200",
+    medium: "bg-yellow-50 text-yellow-700 border-yellow-200",
+    low: "bg-red-50 text-red-700 border-red-200",
+  };
+  const labelMap = { high: "High", medium: "Medium", low: "Low" };
+  return (
+    <div className={`rounded-lg border p-3 ${colorMap[confidence.level]}`}>
+      <p className="text-xs opacity-70">Confidence</p>
+      <p className="text-sm font-medium">
+        {labelMap[confidence.level]} ({confidence.score}/100)
+      </p>
+    </div>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  warn,
+}: {
+  label: string;
+  value: string;
+  warn: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-lg p-3 ${warn ? "bg-yellow-50 border border-yellow-200" : "bg-muted/50"}`}
+    >
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-sm font-medium">{value}</p>
+    </div>
+  );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remainSecs = secs % 60;
+  return `${mins}m ${remainSecs}s`;
 }

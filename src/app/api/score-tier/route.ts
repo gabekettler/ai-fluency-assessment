@@ -91,6 +91,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Store behavioral signals (fire-and-forget — never block scoring)
+    if (body.behavioral_signals) {
+      const bs = body.behavioral_signals;
+      serviceClient
+        .from("behavioral_signals")
+        .insert({
+          assessment_id,
+          tier_number,
+          paste_count: bs.paste_count,
+          largest_paste_length: bs.largest_paste_length,
+          focus_loss_count: bs.focus_loss_count,
+          total_blur_duration_ms: bs.total_blur_duration_ms,
+          time_on_tier_ms: bs.tier_submit_time - bs.tier_start_time,
+          burst_count: bs.burst_count,
+          answer_char_counts: bs.answer_char_counts,
+          answer_word_counts: bs.answer_word_counts,
+        })
+        .then(({ error: bsError }) => {
+          if (bsError) {
+            console.error("Behavioral signals insert error (non-fatal):", bsError);
+          }
+        });
+    }
+
     // Update highest tier attempted
     await serviceClient
       .from("assessments")
