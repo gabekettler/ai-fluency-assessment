@@ -25,6 +25,11 @@ export default function AssessmentPage() {
   const [answers, setAnswers] = useState<[string, string, string]>(["", "", ""]);
   const [error, setError] = useState("");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [elapsedTier, setElapsedTier] = useState(currentTier);
+  if (elapsedTier !== currentTier) {
+    setElapsedTier(currentTier);
+    setElapsedSeconds(0);
+  }
 
   // --- Behavioral signal tracking (invisible, no re-renders) ---
   const pasteCountsRef = useRef<[number, number, number]>([0, 0, 0]);
@@ -51,7 +56,6 @@ export default function AssessmentPage() {
     burstCountRef.current = 0;
     lastAnswerLengthsRef.current = [0, 0, 0];
     lastInputTimeRef.current = [0, 0, 0];
-    setElapsedSeconds(0);
   }, [currentTier]);
 
   // Visible timer — ticks every second during questions phase
